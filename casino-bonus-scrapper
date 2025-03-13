@@ -1,0 +1,137 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+import time
+import imaplib
+import email
+from email.header import decode_header
+import os
+from selenium.webdriver.chrome.options import Options
+import random
+import subprocess
+import json
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+import schedule
+from flask import Flask, jsonify
+import threading
+
+app = Flask(__name__)
+
+# List of casino bonus URLs (Example sites, replace with real ones)
+CASINO_URLS = [
+    "https://www.examplecasino1.com/bonuses",
+    "https://www.examplecasino2.com/promotions",
+    "https://www.examplecasino3.com/offers"
+]
+
+def scrape_bonus(url):
+    """Extracts bonus details from a casino promotions page."""
+    try:
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        bonuses = []
+        for bonus_section in soup.find_all("div", class_="bonus-card"):  # Modify based on actual HTML
+            name = bonus_section.find("h2").text.strip()
+            amount = bonus_section.find("span", class_="bonus-amount").text.strip()
+            wagering = bonus_section.find("span", class_="wagering").text.strip()
+            restrictions = bonus_section.find("span", class_="game-restrictions").text.strip()
+            expiry = bonus_section.find("span", class_="expiry-date").text.strip()
+            
+            bonuses.append({
+                "Casino": url,
+                "Bonus Type": name,
+                "Amount": float(amount.replace("$", "")),
+                "Wagering": int(wagering.replace("x", "")),
+                "Game Restrictions": restrictions,
+                "Expiry": expiry
+            })
+        return bonuses
+    except Exception as e:
+        print(f"Error scraping {url}: {e}")
+        return []
+
+# Scrape all casinos
+all_bonuses = []
+for url in CASINO_URLS:
+    all_bonuses.extend(scrape_bonus(url))
+
+# Save to CSV
+if all_bonuses:
+    df = pd.DataFrame(all_bonuses)
+    df.to_csv("casino_bonuses.csv", index=False)
+    print("Casino bonuses saved to casino_bonuses.csv")
+else:
+    print("No bonuses found.")
+
+# AI Optimization: Predict Best Bonuses to Claim
+def optimize_bonus_selection():
+    """Uses AI to determine the most profitable bonuses based on historical data."""
+    try:
+        df = pd.read_csv("casino_bonuses.csv")
+        df["Profitability_Score"] = df["Amount"] / df["Wagering"]  # Simple profitability metric
+        
+        X = df[["Amount", "Wagering"]]
+        y = (df["Profitability_Score"] > df["Profitability_Score"].median()).astype(int)  # Classify into high/low value bonuses
+        
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+        model = LogisticRegression()
+        model.fit(X_train, y_train)
+        
+        df["AI_Prediction"] = model.predict(scaler.transform(X))
+        df.to_csv("optimized_bonuses.csv", index=False)
+        print("AI optimization completed. Best bonuses saved to optimized_bonuses.csv")
+    except Exception as e:
+        print(f"Error in AI optimization: {e}")
+
+# Run AI Optimization
+optimize_bonus_selection()
+
+# Example Usage: Select the top AI-recommended bonuses
+def select_best_bonus():
+    """Selects and returns the best AI-recommended bonus."""
+    df = pd.read_csv("optimized_bonuses.csv")
+    best_bonus = df[df["AI_Prediction"] == 1].sort_values("Profitability_Score", ascending=False).iloc[0]
+    print(f"Best Bonus Selected: {best_bonus['Casino']} - {best_bonus['Bonus Type']} (${best_bonus['Amount']})")
+    return best_bonus
+
+# Get the best bonus
+best_bonus = select_best_bonus()
+
+# Cloud Deployment API
+def run_server():
+    """Starts a Flask server for managing the automation remotely."""
+    @app.route("/status", methods=["GET"])
+    def status():
+        return jsonify({"status": "running", "message": "Casino bonus automation is active."})
+    
+    @app.route("/optimize", methods=["POST"])
+    def run_optimization():
+        optimize_bonus_selection()
+        return jsonify({"message": "AI optimization completed."})
+    
+    app.run(host='0.0.0.0', port=5000)
+
+# Scheduling for continuous automation
+schedule.every(6).hours.do(optimize_bonus_selection)  # Run AI optimization every 6 hours
+
+def run_scheduler():
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# Run cloud server and scheduler in parallel
+if __name__ == "__main__":
+    threading.Thread(target=run_server).start()
+    threading.Thread(target=run_scheduler).start()
